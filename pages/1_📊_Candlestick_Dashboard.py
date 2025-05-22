@@ -2,9 +2,12 @@ import streamlit as st
 import plotly.graph_objects as go
 from utils.data_processing import load_data
 
-st.set_page_config(page_title="TSLA Candlestick Chart", layout="wide")
-
-st.title("📊 TSLA Candlestick Dashboard")
+# Must be the first Streamlit command
+st.set_page_config(
+    page_title="TSLA Candlestick Chart", 
+    layout="wide",
+    page_icon="📊"
+)
 
 try:
     # Load data
@@ -36,3 +39,4 @@ try:
         
 except Exception as e:
     st.error(f"Error: {str(e)}")
+    st.stop()

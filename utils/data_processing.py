@@ -7,8 +7,11 @@ def load_data(file_path: str) -> pd.DataFrame:
         if not Path(file_path).exists():
             raise FileNotFoundError(f"Data file not found: {file_path}")
             
-        # Read CSV file with lowercase column names
+        # Read CSV file with proper parsing
         df = pd.read_csv(file_path)
+        
+        # Convert date strings to datetime
+        df['date'] = pd.to_datetime(df['date'], format='mixed')
         
         # Rename columns to match expected format
         column_mapping = {
@@ -19,11 +22,7 @@ def load_data(file_path: str) -> pd.DataFrame:
             'close': 'Close',
             'volume': 'Volume'
         }
-        
         df = df.rename(columns=column_mapping)
-        
-        # Convert date strings to datetime
-        df['Date'] = pd.to_datetime(df['Date'], format='mixed')
         
         # Convert volume to numeric, removing commas
         df['Volume'] = df['Volume'].str.replace(',', '').astype(float)
@@ -35,8 +34,6 @@ def load_data(file_path: str) -> pd.DataFrame:
         
         # Sort by date
         df = df.sort_values('Date')
-        
-        # Remove any invalid rows
         df = df.dropna()
         
         return df
