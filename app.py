@@ -14,6 +14,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+<<<<<<< HEAD
 # Custom CSS
 st.markdown("""
 <style>
@@ -95,3 +96,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+=======
+st.title("📈 TSLA Stock Analysis Dashboard")
+st.write("Welcome to the TSLA Stock Analysis Dashboard. Please select a page from the sidebar.")
+>>>>>>> 0a409822f013deff9465a63f4bb998d12486bff4

@@ -1,3 +1,6 @@
+[general]
+python_version = "3.10"
+
 [browser]
 gatherUsageStats = false
 serverAddress = "localhost"
@@ -14,6 +17,7 @@ backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F0F2F6"
 textColor = "#262730"
 font = "sans serif"
+<<<<<<< HEAD
 
 [runner]
 magicEnabled = true
@@ -22,3 +26,5 @@ fastReruns = true
 [client]
 showErrorDetails = true
 toolbarMode = "minimal"
+=======
+>>>>>>> 0a409822f013deff9465a63f4bb998d12486bff4
