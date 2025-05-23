@@ -5,6 +5,10 @@ from datetime import datetime, timedelta
 import time
 import json
 
+# Initialize session state variables
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+
 # Rate limiting configuration
 RATE_LIMITS = {
     "requests_per_minute": 3,
