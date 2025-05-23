@@ -44,114 +44,40 @@ def tradingview_chart(data, height=500, key=None, support_levels=None, resistanc
     required_columns = ['Date', 'Open', 'High', 'Low', 'Close']
     
     # Validate input data
-    if data is None or data.empty:
-        st.warning("Chart cannot be displayed. No data provided.")
-        return
-    
-    missing_columns = [col for col in required_columns if col not in data.columns]
-    if missing_columns:
-        st.warning(f"Chart cannot be displayed. Missing columns: {missing_columns}")
+    if not all(col in data.columns for col in required_columns):
+        st.error(f"Missing required columns. Required: {required_columns}")
         return
 
-    # Clean and prepare data with strict validation
-    valid_data = []
-    markers = []
+    # Convert date to string format
+    data['Date'] = pd.to_datetime(data['Date']).dt.strftime('%Y-%m-%d')
     
+    # Prepare candlestick data
+    candlestick_data = []
     for idx, row in data.iterrows():
-        try:
-            # Validate date
-            if not is_valid_date(row['Date']):
-                continue
-                
-            # Validate OHLC values
-            ohlc_values = {}
-            skip_row = False
-            
-            for col in ['Open', 'High', 'Low', 'Close']:
-                if not is_valid_number(row[col]):
-                    skip_row = True
-                    break
-                ohlc_values[col.lower()] = round(float(row[col]), 2)
-            
-            if skip_row:
-                continue
-            
-            # Additional validation: High >= Low, and OHLC values are logical
-            if ohlc_values['high'] < ohlc_values['low']:
-                continue
-                
-            # Convert date to proper format
-            ts = pd.to_datetime(row['Date'])
-            date_str = ts.strftime("%Y-%m-%d")
-            
-            candle_data = {
-                "time": date_str,
-                "open": ohlc_values['open'],
-                "high": ohlc_values['high'],
-                "low": ohlc_values['low'],
-                "close": ohlc_values['close']
-            }
-            valid_data.append(candle_data)
-            
-            # Add direction marker if available
-            if 'Direction' in row and not pd.isna(row['Direction']):
-                direction = str(row['Direction']).upper()
-                if direction in ['LONG', 'SHORT']:
+        if all(pd.notna(row[col]) for col in ['Open', 'High', 'Low', 'Close']):
+            candlestick_data.append({
+                "time": row['Date'],
+                "open": float(row['Open']),
+                "high": float(row['High']),
+                "low": float(row['Low']),
+                "close": float(row['Close'])
+            })
+
+    # Prepare direction markers
+    direction_markers = []
+    if 'Direction' in data.columns:
+        for idx, row in data.iterrows():
+            if pd.notna(row['Direction']):
+                direction = row['Direction'].upper()
+                if direction in ['LONG', 'SHORT', 'NONE']:
                     marker = {
-                        "time": date_str,
-                        "position": "belowBar" if direction == 'LONG' else "aboveBar",
-                        "color": "#26a69a" if direction == 'LONG' else "#ef5350",
-                        "shape": "arrowUp" if direction == 'LONG' else "arrowDown",
+                        "time": row['Date'],
+                        "position": "belowBar" if direction == 'LONG' else "aboveBar" if direction == 'SHORT' else "inBar",
+                        "color": "#26a69a" if direction == 'LONG' else "#ef5350" if direction == 'SHORT' else "#ffeb3b",
+                        "shape": "arrowUp" if direction == 'LONG' else "arrowDown" if direction == 'SHORT' else "circle",
                         "text": direction
                     }
-                    markers.append(marker)
-                elif direction == 'NONE':
-                    marker = {
-                        "time": date_str,
-                        "position": "belowBar",
-                        "color": "#ffd700",
-                        "shape": "circle",
-                        "text": "None"
-                    }
-                    markers.append(marker)
-            
-        except Exception as e:
-            # Skip invalid rows silently
-            continue
-
-    if not valid_data:
-        st.error("No valid candlestick data found. Please check your data format.")
-        st.write("Data requirements:")
-        st.write("- Date column with valid dates")
-        st.write("- Open, High, Low, Close columns with positive numbers")
-        st.write("- High >= Low for each row")
-        return
-
-    # Sort data by date to ensure proper ordering
-    valid_data.sort(key=lambda x: x['time'])
-    markers.sort(key=lambda x: x['time'])
-
-    st.success(f"✅ Valid candles loaded: {len(valid_data)}")
-    
-    # Show sample data for debugging
-    if st.checkbox("Show sample data", key=f"{key}_debug"):
-        st.write("Sample candles:")
-        for i, candle in enumerate(valid_data[:3]):
-            st.write(f"Candle {i+1}: {candle}")
-            
-    # Additional debugging info
-    if len(valid_data) > 0:
-        st.write(f"📊 Date range: {valid_data[0]['time']} to {valid_data[-1]['time']}")
-        price_values = [c['close'] for c in valid_data]
-        st.write(f"💰 Price range: ${min(price_values):.2f} - ${max(price_values):.2f}")
-
-    # Convert to JSON with error handling
-    try:
-        chart_data_json = json.dumps(valid_data)
-        markers_json = json.dumps(markers)
-    except Exception as e:
-        st.error(f"Error serializing data: {str(e)}")
-        return
+                    direction_markers.append(marker)
 
     # Prepare support and resistance bands
     support_bands = []
@@ -159,223 +85,139 @@ def tradingview_chart(data, height=500, key=None, support_levels=None, resistanc
     
     if 'Support' in data.columns:
         for idx, row in data.iterrows():
-            if not pd.isna(row['Support']):
+            if pd.notna(row['Support']):
                 prices = parse_price_list(row['Support'])
                 if prices:
+                    # Add lower bound of support band (green)
                     support_bands.append({
-                        "time": pd.to_datetime(row['Date']).strftime("%Y-%m-%d"),
+                        "time": row['Date'],
                         "value": min(prices),
                         "lineWidth": 2,
-                        "lineColor": "#26a69a",
+                        "lineColor": "#26a69a",  # Green color
                         "lineStyle": 0,
                         "axisLabelVisible": True,
-                        "title": "Support Band"
+                        "title": "Support Lower"
                     })
+                    # Add upper bound of support band (green)
                     support_bands.append({
-                        "time": pd.to_datetime(row['Date']).strftime("%Y-%m-%d"),
+                        "time": row['Date'],
                         "value": max(prices),
                         "lineWidth": 2,
-                        "lineColor": "#26a69a",
+                        "lineColor": "#26a69a",  # Green color
                         "lineStyle": 0,
                         "axisLabelVisible": True,
-                        "title": "Support Band"
+                        "title": "Support Upper"
                     })
     
     if 'Resistance' in data.columns:
         for idx, row in data.iterrows():
-            if not pd.isna(row['Resistance']):
+            if pd.notna(row['Resistance']):
                 prices = parse_price_list(row['Resistance'])
                 if prices:
+                    # Add lower bound of resistance band (red)
                     resistance_bands.append({
-                        "time": pd.to_datetime(row['Date']).strftime("%Y-%m-%d"),
+                        "time": row['Date'],
                         "value": min(prices),
                         "lineWidth": 2,
-                        "lineColor": "#ef5350",
+                        "lineColor": "#ef5350",  # Red color
                         "lineStyle": 0,
                         "axisLabelVisible": True,
-                        "title": "Resistance Band"
+                        "title": "Resistance Lower"
                     })
+                    # Add upper bound of resistance band (red)
                     resistance_bands.append({
-                        "time": pd.to_datetime(row['Date']).strftime("%Y-%m-%d"),
+                        "time": row['Date'],
                         "value": max(prices),
                         "lineWidth": 2,
-                        "lineColor": "#ef5350",
+                        "lineColor": "#ef5350",  # Red color
                         "lineStyle": 0,
                         "axisLabelVisible": True,
-                        "title": "Resistance Band"
+                        "title": "Resistance Upper"
                     })
 
+    # Create HTML with TradingView chart
     html = f'''
     <div id="{key}_container" style="width: 100%; height: {height}px; border: 1px solid #ddd; position: relative;"></div>
     <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
     <script>
     (function() {{
-        let chartInstance = null;
-        let candlestickSeries = null;
-        let initializationAttempts = 0;
-        const MAX_ATTEMPTS = 50;  // Maximum number of initialization attempts
-        const RETRY_DELAY = 100;  // Delay between attempts in milliseconds
-        
-        function waitForContainer() {{
-            return new Promise((resolve, reject) => {{
-                const container = document.getElementById("{key}_container");
-                if (!container) {{
-                    reject(new Error('Container not found'));
-                    return;
-                }}
-                
-                const checkDimensions = () => {{
-                    if (container.clientWidth > 0 && container.clientHeight > 0) {{
-                        resolve(container);
-                    }} else {{
-                        initializationAttempts++;
-                        if (initializationAttempts >= MAX_ATTEMPTS) {{
-                            reject(new Error('Container dimensions not available after maximum attempts'));
-                            return;
-                        }}
-                        setTimeout(checkDimensions, RETRY_DELAY);
-                    }}
-                }};
-                
-                checkDimensions();
+        const container = document.getElementById('{key}_container');
+        const chart = LightweightCharts.createChart(container, {{
+            width: container.clientWidth,
+            height: {height},
+            layout: {{
+                background: {{ color: '#ffffff' }},
+                textColor: '#333',
+            }},
+            grid: {{
+                vertLines: {{ color: '#f0f0f0' }},
+                horzLines: {{ color: '#f0f0f0' }},
+            }},
+            crosshair: {{
+                mode: LightweightCharts.CrosshairMode.Normal,
+            }},
+            rightPriceScale: {{
+                borderColor: '#ddd',
+            }},
+            timeScale: {{
+                borderColor: '#ddd',
+                timeVisible: true,
+                secondsVisible: false,
+            }},
+        }});
+
+        // Add candlestick series
+        const candlestickSeries = chart.addCandlestickSeries({{
+            upColor: '#26a69a',
+            downColor: '#ef5350',
+            borderVisible: false,
+            wickUpColor: '#26a69a',
+            wickDownColor: '#ef5350'
+        }});
+        candlestickSeries.setData({json.dumps(candlestick_data)});
+
+        // Add direction markers
+        const directionMarkers = {json.dumps(direction_markers)};
+        directionMarkers.forEach(marker => {{
+            candlestickSeries.setMarkers([marker]);
+        }});
+
+        // Add support and resistance bands
+        const supportBands = {json.dumps(support_bands)};
+        const resistanceBands = {json.dumps(resistance_bands)};
+
+        // Create support band series (green)
+        if (supportBands && supportBands.length > 0) {{
+            const supportSeries = chart.addLineSeries({{
+                color: '#26a69a',  // Green color
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                lastValueVisible: false,
+                priceLineVisible: false,
+                title: 'Support Band'
             }});
-        }}
-        
-        async function initChart() {{
-            try {{
-                // Wait for container to be ready
-                const container = await waitForContainer();
-                
-                // Clear any existing chart
-                if (chartInstance) {{
-                    chartInstance.remove();
-                    chartInstance = null;
-                }}
-                
-                container.innerHTML = '';
-
-                // Create chart instance
-                chartInstance = LightweightCharts.createChart(container, {{
-                    width: container.clientWidth,
-                    height: {height},
-                    layout: {{
-                        backgroundColor: '#ffffff',
-                        textColor: '#333333',
-                        fontSize: 12,
-                        fontFamily: 'Arial, sans-serif'
-                    }},
-                    grid: {{
-                        vertLines: {{ color: '#f0f0f0' }},
-                        horzLines: {{ color: '#f0f0f0' }}
-                    }},
-                    crosshair: {{
-                        mode: LightweightCharts.CrosshairMode.Normal,
-                    }},
-                    rightPriceScale: {{ 
-                        borderColor: '#cccccc',
-                        scaleMargins: {{
-                            top: 0.1,
-                            bottom: 0.1
-                        }},
-                        visible: true
-                    }},
-                    timeScale: {{ 
-                        borderColor: '#cccccc',
-                        timeVisible: true,
-                        secondsVisible: false,
-                        fixLeftEdge: true,
-                        fixRightEdge: true
-                    }},
-                    handleScroll: {{
-                        mouseWheel: true,
-                        pressedMouseMove: true,
-                        horzTouchDrag: true,
-                        vertTouchDrag: true
-                    }},
-                    handleScale: {{
-                        mouseWheel: true,
-                        pinch: true,
-                        axisPressedMouseMove: true,
-                        axisDoubleClickReset: true
-                    }}
-                }});
-
-                // Create candlestick series
-                candlestickSeries = chartInstance.addCandlestickSeries({{
-                    upColor: '#26a69a',
-                    downColor: '#ef5350',
-                    borderVisible: false,
-                    wickUpColor: '#26a69a',
-                    wickDownColor: '#ef5350'
-                }});
-
-                // Parse and validate chart data
-                const chartData = JSON.parse('{chart_data_json}');
-                if (!Array.isArray(chartData) || chartData.length === 0) {{
-                    throw new Error('Invalid chart data format');
-                }}
-
-                // Set data to the series
-                candlestickSeries.setData(chartData);
-
-                // Add markers
-                const markers = JSON.parse('{markers_json}');
-                if (markers && markers.length > 0) {{
-                    candlestickSeries.setMarkers(markers);
-                }}
-
-                // Add support and resistance bands
-                const supportBands = JSON.parse('{json.dumps(support_bands)}');
-                const resistanceBands = JSON.parse('{json.dumps(resistance_bands)}');
-
-                // Create support band series
-                if (supportBands && supportBands.length > 0) {{
-                    const supportSeries = chartInstance.addLineSeries({{
-                        color: '#26a69a',
-                        lineWidth: 2,
-                        lineStyle: LightweightCharts.LineStyle.Solid,
-                        lastValueVisible: false,
-                        priceLineVisible: false,
-                    }});
-                    supportSeries.setData(supportBands);
-                }}
-
-                // Create resistance band series
-                if (resistanceBands && resistanceBands.length > 0) {{
-                    const resistanceSeries = chartInstance.addLineSeries({{
-                        color: '#ef5350',
-                        lineWidth: 2,
-                        lineStyle: LightweightCharts.LineStyle.Solid,
-                        lastValueVisible: false,
-                        priceLineVisible: false,
-                    }});
-                    resistanceSeries.setData(resistanceBands);
-                }}
-
-                // Fit content
-                chartInstance.timeScale().fitContent();
-
-                // Handle window resize
-                const resizeObserver = new ResizeObserver(entries => {{
-                    if (chartInstance) {{
-                        chartInstance.applyOptions({{
-                            width: container.clientWidth
-                        }});
-                    }}
-                }});
-                resizeObserver.observe(container);
-
-            }} catch (error) {{
-                console.error('Error initializing chart:', error);
-                // Retry initialization if container wasn't ready
-                if (initializationAttempts < MAX_ATTEMPTS) {{
-                    setTimeout(initChart, RETRY_DELAY);
-                }}
-            }}
+            supportSeries.setData(supportBands);
         }}
 
-        // Start initialization process
-        initChart();
+        // Create resistance band series (red)
+        if (resistanceBands && resistanceBands.length > 0) {{
+            const resistanceSeries = chart.addLineSeries({{
+                color: '#ef5350',  // Red color
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                lastValueVisible: false,
+                priceLineVisible: false,
+                title: 'Resistance Band'
+            }});
+            resistanceSeries.setData(resistanceBands);
+        }}
+
+        // Handle window resize
+        window.addEventListener('resize', () => {{
+            chart.applyOptions({{
+                width: container.clientWidth
+            }});
+        }});
     }})();
     </script>
     '''

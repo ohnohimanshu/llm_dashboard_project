@@ -16,12 +16,32 @@ def convert_datetime_to_str(df, date_column='Date'):
     return df
 
 
+def list_str_to_csv(val):
+    """Convert list string to CSV format and handle direction values"""
+    if pd.isna(val):
+        return val
+    if isinstance(val, str):
+        # Handle direction values
+        if val.upper() in ['LONG', 'SHORT', 'NONE']:
+            return val.upper()
+        # Handle list strings
+        if val.startswith('[') and val.endswith(']'):
+            try:
+                parsed = ast.literal_eval(val)
+                if isinstance(parsed, (list, tuple)):
+                    return ','.join(str(x) for x in parsed)
+            except Exception:
+                pass
+    return val
+
+
 def load_data(file_path: str = 'data/tsla_data.csv') -> pd.DataFrame:
     """Load and process TSLA stock data from a local CSV file only."""
     try:
         # Always use the local CSV file
         if not Path(file_path).exists():
             raise FileNotFoundError(f"Data file not found: {file_path}")
+        
         # Read CSV file with proper parsing
         try:
             df = pd.read_csv(file_path, encoding='utf-8')
@@ -38,91 +58,47 @@ def load_data(file_path: str = 'data/tsla_data.csv') -> pd.DataFrame:
         df.columns = df.columns.str.strip().str.lower()
         st.write(f"Columns after lowercasing: {list(df.columns)}")
 
-        # Try to find a date column
-        possible_date_cols = ['date', 'timestamp', 'datetime', 'time']
-        found_date_col = None
-        for col in possible_date_cols:
-            if col in df.columns:
-                found_date_col = col
-                break
-        if not found_date_col:
-            st.error(f"No date-like column found. Available columns: {list(df.columns)}")
-            return None
-
         # Map columns to expected names
         col_map = {
-            found_date_col: 'Date',
+            'date': 'Date',
             'open': 'Open',
             'high': 'High',
             'low': 'Low',
             'close': 'Close',
             'volume': 'Volume',
+            'direction': 'Direction',
+            'support': 'Support',
+            'resistance': 'Resistance'
         }
         df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
         st.write(f"Columns after renaming: {list(df.columns)}")
 
-        # Remove rows where date is clearly invalid (empty, null, or not a date)
+        # Process date column
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         df = df.dropna(subset=['Date'])
-        df = df[df['Date'].astype(str).str.strip() != '']
-        # Try to parse dates, skip rows that fail
-        def try_parse_date(val):
-            try:
-                return pd.to_datetime(val, errors='raise')
-            except Exception:
-                return pd.NaT
-        df['Date'] = df['Date'].apply(try_parse_date)
-        invalid_dates = df['Date'].isna().sum()
-        if invalid_dates > 0:
-            st.warning(f"⚠️ Removed {invalid_dates} rows with invalid dates")
-            df = df.dropna(subset=['Date'])
-        if df.empty:
-            raise ValueError("All date values are invalid")
-
-        # Convert price and volume columns to numeric
+        
+        # Convert price columns to numeric
         for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
             if col in df.columns:
-                df[col] = df[col].astype(str).str.replace('[$,]', '', regex=True)
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+                df[col] = pd.to_numeric(df[col].astype(str).str.replace('[$,]', '', regex=True), errors='coerce')
 
-        # Remove rows with any null values in OHLC columns
-        required_columns = ['Date', 'Open', 'High', 'Low', 'Close']
-        null_counts = df[required_columns].isnull().sum()
-        total_nulls = null_counts.sum()
-        if total_nulls > 0:
-            st.warning(f"⚠️ Found null values: {dict(null_counts[null_counts > 0])}")
-        original_count = len(df)
-        df = df.dropna(subset=required_columns)
-        removed_count = original_count - len(df)
-        if removed_count > 0:
-            st.warning(f"⚠️ Removed {removed_count} rows with null values in OHLC columns")
-        if len(df) == 0:
-            raise ValueError("No valid data rows remain after cleaning")
-
-        # Sort by date
-        df = df.sort_values('Date')
-        # Convert datetime to string format for Arrow compatibility
-        df = convert_datetime_to_str(df)
-        # Ensure all columns are Arrow-compatible (no object/list columns)
-        for col in df.columns:
-            if df[col].dtype == 'O':
-                df[col] = df[col].apply(lambda x: ','.join(map(str, x)) if isinstance(x, (list, tuple)) else str(x) if not pd.isna(x) else '')
-        # Apply list string to CSV conversion
-        for col in ['Support', 'Resistance', 'direction']:
+        # Process direction, support, and resistance columns
+        for col in ['Direction', 'Support', 'Resistance']:
             if col in df.columns:
                 df[col] = df[col].apply(list_str_to_csv)
+
+        # Remove rows with invalid OHLC data
+        df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
+        
+        # Sort by date
+        df = df.sort_values('Date')
+        
+        # Convert datetime to string format for Arrow compatibility
+        df = convert_datetime_to_str(df)
+        
         st.success(f"✅ Successfully loaded {len(df)} rows of data")
         return df
+        
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
         return None
-
-def list_str_to_csv(val):
-    # Converts '[840, 880]' or '[840]' to '840,880' or '840'
-    if isinstance(val, str) and val.startswith('[') and val.endswith(']'):
-        try:
-            parsed = ast.literal_eval(val)
-            if isinstance(parsed, (list, tuple)):
-                return ','.join(str(x) for x in parsed)
-        except Exception:
-            pass
-    return val
