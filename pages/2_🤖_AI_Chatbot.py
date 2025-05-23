@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
 import google.generativeai as genai
-from utils.data_processing import load_data
 from datetime import datetime, timedelta
-import socket
 import time
+import json
 
 # Rate limiting configuration
 RATE_LIMITS = {
@@ -14,404 +13,251 @@ RATE_LIMITS = {
     "cooldown_period": 300  # 5 minutes in seconds
 }
 
-def check_network_connectivity():
-    """Check if the application can connect to Google's API"""
+def create_data_summary(df):
+    """Create a concise summary of the dataset to reduce token usage"""
     try:
-        # Try to connect to Google's DNS
-        socket.create_connection(("8.8.8.8", 53), timeout=3)
-        # Also try to connect to the Gemini API endpoint
-        socket.create_connection(("generativelanguage.googleapis.com", 443), timeout=3)
-        return True, "Connection successful"
-    except OSError as e:
-        # More detailed error message
-        return False, f"Connection failed: {str(e)}"
-    except Exception as e:
-        # Catch any other exceptions
-        return False, f"Unexpected error checking connection: {str(e)}"
-
-# Must be the first Streamlit command
-st.set_page_config(
-    page_title="TSLA AI Analysis Bot",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Custom CSS for better styling
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1E88E5;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Main header
-st.markdown('<h1 class="main-header">🤖 TSLA Stock Analysis Assistant</h1>', unsafe_allow_html=True)
-
-# Sidebar enhancements
-with st.sidebar:
-    st.markdown("### 📊 System Status")
-    
-    if 'rate_limiter' in st.session_state:
-        status = st.session_state.rate_limiter.get_rate_limit_status()
-        
-        # Calculate usage percentages
-        minute_usage = status["requests_this_minute"] / status["minute_limit"]
-        daily_usage = status["requests_today"] / status["daily_limit"]
-        
-        # API Status indicator with better styling
-        st.markdown(
-            f"""
-            <div style='padding: 10px; border-radius: 5px; margin-bottom: 10px; 
-                background-color: {"#FFA726" if status["minute_reset_in"] > 0 else "#4CAF50" if not status["in_cooldown"] else "#F44336"}'>
-                <strong>API Status:</strong> {
-                    "🔴 Cooling Down" if status["in_cooldown"] else
-                    "🟡 Rate Limited" if status["minute_reset_in"] > 0 else
-                    "🟢 Ready"
-                }
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        
-        # Usage metrics with visual indicators
-        st.markdown("#### Usage Metrics")
-        cols = st.columns(2)
-        
-        # Minute usage
-        with cols[0]:
-            st.metric(
-                "Per Minute",
-                f"{status['requests_this_minute']}/{status['minute_limit']}",
-                delta=f"{status['minute_limit'] - status['requests_this_minute']} remaining",
-                delta_color="inverse"
-            )
-            
-        # Daily usage
-        with cols[1]:
-            st.metric(
-                "Per Day",
-                f"{status['requests_today']}/{status['daily_limit']}",
-                delta=f"{status['daily_limit'] - status['requests_today']} remaining",
-                delta_color="inverse"
-            )
-        
-        # Progress bars with dynamic colors
-        st.markdown("#### Request Limits")
-        
-        # Minute progress
-        st.markdown(f"**Per Minute** ({status['requests_this_minute']}/{status['minute_limit']})")
-        minute_color = "#00f2c3" if minute_usage < 0.7 else "#ffa726" if minute_usage < 0.9 else "#f44336"
-        st.progress(minute_usage, text="")
-        
-        # Daily progress
-        st.markdown(f"**Per Day** ({status['requests_today']}/{status['daily_limit']})")
-        daily_color = "#00f2c3" if daily_usage < 0.7 else "#ffa726" if daily_usage < 0.9 else "#f44336"
-        st.progress(daily_usage, text="")
-        
-        # Reset countdown if needed
-        if status["minute_reset_in"] > 0:
-            st.info(f"⏱️ Rate limit resets in: {int(status['minute_reset_in'])} seconds")
-
-# Import the RateLimiter from utils
-from utils.rate_limiter import RateLimiter as BaseRateLimiter
-
-# Extended RateLimiter class with additional functionality
-class RateLimiter(BaseRateLimiter):
-  def __init__(self, config):
-    super().__init__(config)
-    self.minute_limit = config.get("requests_per_minute", 3)
-    self.daily_limit = config.get("requests_per_day", 50)
-    self.cooldown_period = config.get("cooldown_period", 300)
-    self.token_limit = config.get("token_limit", 4000)
-    self.in_cooldown = False
-    self.cooldown_start = None
-    self.consecutive_network_errors = 0
-    self.consecutive_rate_limit_errors = 0
-
-  def can_make_request(self):
-    now = datetime.now()
-    # Check cooldown first
-    if self.in_cooldown:
-        if (now - self.cooldown_start).total_seconds() > self.cooldown_period:
-            self.in_cooldown = False
-            self.reset_counters()
-        else:
-            return False
-    
-    # Use base class method
-    can_request = super().can_make_request()
-    
-    # If rate limits exceeded, enter cooldown
-    if not can_request:
-        self.in_cooldown = True
-        self.cooldown_start = now
-        
-    return can_request
-    
-  def reset_counters(self):
-    """Reset all request counters"""
-    self.requests_this_minute = 0
-    self.requests_today = 0
-    self.last_minute = datetime.now()
-    self.day_start = datetime.now().date()
-    
-  def record_request(self):
-    # Call the parent class method
-    super().record_request()
-    
-    # Check if we need to enter cooldown
-    if self.requests_this_minute >= self.minute_limit or self.requests_today >= self.daily_limit:
-        self.in_cooldown = True
-        self.cooldown_start = datetime.now()
-
-  def get_wait_time(self):
-    now = datetime.now()
-    if self.in_cooldown:
-        return max(0, self.cooldown_period - (now - self.cooldown_start).total_seconds())
-    
-    # Get base wait time
-    base_wait_time = super().get_wait_time()
-    
-    # If we're at daily limit, enter cooldown
-    if self.requests_today >= self.daily_limit:
-        self.in_cooldown = True
-        self.cooldown_start = now
-        return max(0, self.cooldown_period)
-        
-    return base_wait_time
-
-  def get_rate_limit_status(self):
-    now = datetime.now()
-    minute_reset_in = max(0, 60 - (now - self.last_request_time).total_seconds())
-    cooldown_reset_in = 0
-    if self.in_cooldown and self.cooldown_start:
-        cooldown_reset_in = max(0, self.cooldown_period - (now - self.cooldown_start).total_seconds())
-    
-    return {
-        "minute_limit": self.minute_limit,
-        "daily_limit": self.daily_limit,
-        "requests_this_minute": self.requests_this_minute,
-        "requests_today": self.requests_today,
-        "minute_reset_in": minute_reset_in,
-        "cooldown_reset_in": cooldown_reset_in,
-        "in_cooldown": self.in_cooldown
-    }
-
-  def record_error(self, error_type="network"):
-    if error_type == "network":
-        self.consecutive_network_errors += 1
-    elif error_type == "rate_limit":
-        self.consecutive_rate_limit_errors += 1
-
-  def reset_network_errors(self):
-    self.consecutive_network_errors = 0
-
-  def reset_rate_limit_errors(self):
-    self.consecutive_rate_limit_errors = 0
-
-  def get_network_backoff_time(self, attempt, error_type=None):
-    # Exponential backoff: 2, 4, 8, ... seconds, max 60
-    return min(60, 2 ** (attempt + 1))
-
-# Initialize session state variables
-if 'rate_limiter' not in st.session_state:
-    st.session_state.rate_limiter = RateLimiter(RATE_LIMITS)
-if 'data_summary' not in st.session_state:
-    st.session_state.data_summary = None
-
-# Main content area
-
-try:
-    df = load_data("data/tsla_data.csv")
-    if df is not None and not df.empty:
-        # Display network status
-        network_status, network_message = check_network_connectivity()
-        if not network_status:
-            st.error(f"⚠️ Network Error: {network_message}")
-            st.stop()
-            
-        # Data overview in cards
-        st.markdown("### 📈 Market Overview")
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown(
-                f"""
-                <div class="stat-card">
-                    <h4>Price Range</h4>
-                    <p class="info-text">💲{df['Low'].min():.2f} - {df['High'].max():.2f}</p>
-                </div>
-                """, 
-                unsafe_allow_html=True
-            )
-        
-        with col2:
-            st.markdown(
-                f"""
-                <div class="stat-card">
-                    <h4>Average Volume</h4>
-                    <p class="info-text">🔄 {int(df['Volume'].mean()):,}</p>
-                </div>
-                """, 
-                unsafe_allow_html=True
-            )
-        
-        with col3:
-            st.markdown(
-                f"""
-                <div class="stat-card">
-                    <h4>Date Range</h4>
-                    <p class="info-text">📅 {df['Date'].min().strftime('%Y-%m-%d')} to {df['Date'].max().strftime('%Y-%m-%d')}</p>
-                </div>
-                """, 
-                unsafe_allow_html=True
-            )
-
-        # Question input with better styling
-        st.markdown("### 💬 Ask Your Question")
-        st.markdown(
-            """
-            <div class="question-box">
-            Ask me anything about the TSLA stock data. For example:
-            - What's the highest price in the dataset?
-            - How has the volume changed over time?
-            - What's the price trend analysis?
-            </div>
-            """, 
-            unsafe_allow_html=True
-        )
-        
-        question = st.text_input(
-            "Question",  # Adding a proper label to fix the empty label warning
-            placeholder="Type your question here...",
-            key="question_input",
-            label_visibility="collapsed"  # Hide the label but keep it accessible
-        )
-
-        # Add a clear button
-        if question:
-            if st.button("🗑️ Clear Question"):
-                st.session_state.question_input = ""
-                st.experimental_rerun()
-
-        # API key configuration
-        try:
-            api_key = st.secrets.get("GEMINI_API_KEY")
-            if not api_key:
-                st.error("Please set the GEMINI_API_KEY in your Streamlit secrets")
-                st.stop()
-            genai.configure(api_key=api_key)
-        except Exception as e:
-            st.error(f"Error configuring API: {e}")
-            st.stop()
-
-        # Update Gemini model configuration with specific model versions
-        GEMINI_MODELS = {
-            "chat": "models/gemini-1.5-pro-latest",  # Using the latest stable 1.5 Pro model
-            "vision": "models/gemini-pro-vision"      # Keeping vision model as backup
+        if df is None or df.empty:
+            return "No data available"
+        # Get column info
+        columns = df.columns.tolist()
+        st.info(f"📋 Data columns found: {', '.join(columns)}")
+        # Flexible column detection
+        date_col = None
+        price_cols = []
+        volume_col = None
+        for col in columns:
+            col_lower = col.lower()
+            if 'date' in col_lower or 'time' in col_lower:
+                date_col = col
+            elif any(term in col_lower for term in ['price', 'close', 'open', 'high', 'low']):
+                price_cols.append(col)
+            elif 'volume' in col_lower:
+                volume_col = col
+        # Build summary
+        summary = {
+            "total_records": len(df),
+            "columns": columns
         }
-
-        @st.cache_resource
-        def get_ai_response_model():
-            """Initialize and return the AI response model."""
+        # Date range
+        if date_col and date_col in df.columns:
             try:
-                model = genai.GenerativeModel(GEMINI_MODELS["chat"])
-                return model
-            except Exception as e:
-                st.error(f"Error initializing model: {e}")
-                return None
-
-        model = get_ai_response_model()
-
-        # Update the get_ai_response function
-        def get_ai_response(model, prompt, max_retries=3):
-            """Get AI response with optimized token handling"""
-            for attempt in range(max_retries):
-                if st.session_state.rate_limiter.can_make_request():
-                    try:
-                        # Create a more concise prompt
-                        optimized_prompt = f"""Question about TSLA stock: {prompt}
-                
-                Key Data Points:
-                - Latest close: ${df['Close'].iloc[-1]:.2f}
-                - Highest price: ${df['High'].max():.2f}
-                - Average volume: {df['Volume'].mean():,.0f}
-                - Date range: {df['Date'].min().strftime('%Y-%m-%d')} to {df['Date'].max().strftime('%Y-%m-%d')}
-
-                Provide a brief, data-based answer."""
-
-                        st.session_state.rate_limiter.record_request()
-                        response = model.generate_content(optimized_prompt)
-                        return response
-                        
-                    except Exception as e:
-                        error_msg = str(e).lower()
-                        if "token_limit" in error_msg:
-                            st.error("The question requires too much data. Please try a more specific question.")
-                            return None
-                        elif "rate limit" in error_msg or "429" in error_msg:
-                            st.session_state.rate_limiter.record_error("rate_limit")
-                            wait_time = st.session_state.rate_limiter.get_network_backoff_time(attempt, "rate_limit")
-                            st.warning(f"Rate limit exceeded. Waiting {wait_time} seconds before retrying...")
-                            time.sleep(wait_time)
-                            continue
-                        elif "503" in error_msg or "server error" in error_msg or "unavailable" in error_msg:
-                            st.session_state.rate_limiter.record_error("network")
-                            wait_time = st.session_state.rate_limiter.get_network_backoff_time(attempt, "network")
-                            st.warning(f"Google API service unavailable. Waiting {wait_time} seconds before retrying...")
-                            time.sleep(wait_time)
-                            continue
-                        else:
-                            st.error(f"Error generating response: {str(e)}")
-                            return None
-                else:
-                    wait_time = st.session_state.rate_limiter.get_wait_time()
-                    st.warning(f"Rate limit reached. Please wait {wait_time} seconds before trying again.")
-                    time.sleep(min(wait_time, 5))  # Wait at most 5 seconds in the loop
-                    continue
-            
-            st.error("Maximum retry attempts reached. Please try again later.")
-            return None
-
-        # AI response
-        if question and model:
-            with st.spinner("Thinking..."):
+                summary["date_range"] = {
+                    "start": str(df[date_col].min()),
+                    "end": str(df[date_col].max())
+                }
+            except:
+                summary["date_range"] = {"start": "Unknown", "end": "Unknown"}
+        # Price statistics
+        if price_cols:
+            price_stats = {}
+            for col in price_cols:
                 try:
-                    # Process the question to make it more specific
-                    specific_question = question.strip()
-                    if "dataset" in specific_question.lower():
-                        specific_question = specific_question.replace("in the dataset", "")
-                    
-                    # Get response with optimized prompt
-                    response = get_ai_response(model, specific_question)
-                    
-                    if response and response.text:
-                        st.success("Answer:")
-                        st.markdown(response.text)
-                    else:
-                        st.warning("Please try asking a more specific question.")
-                        
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-                    st.info("Please try a more focused question about specific aspects of the data.")
+                    price_stats[col] = {
+                        "latest": float(df[col].iloc[-1]) if len(df) > 0 else 0,
+                        "max": float(df[col].max()),
+                        "min": float(df[col].min()),
+                        "mean": float(df[col].mean())
+                    }
+                except:
+                    continue
+            summary["price_stats"] = price_stats
+        # Volume statistics
+        if volume_col and volume_col in df.columns:
+            try:
+                summary["volume_stats"] = {
+                    "avg_volume": int(df[volume_col].mean()),
+                    "max_volume": int(df[volume_col].max()),
+                    "min_volume": int(df[volume_col].min())
+                }
+            except:
+                pass
+        # Recent trend (if we have numeric data)
+        if price_cols and len(df) >= 5:
+            try:
+                main_price_col = price_cols[0]  # Use first price column
+                recent_data = df.tail(5)
+                price_change = float(recent_data[main_price_col].iloc[-1] - recent_data[main_price_col].iloc[0])
+                summary["recent_trend"] = {
+                    "5day_change": price_change,
+                    "trend_direction": "up" if price_change > 0 else "down" if price_change < 0 else "flat"
+                }
+            except:
+                pass
+        return summary
+    except Exception as e:
+        st.error(f"Error creating data summary: {str(e)}")
+        return {"error": "Error processing data", "columns": df.columns.tolist() if df is not None else []}
+
+# Load and process data from local CSV
+try:
+    with st.spinner("📊 Loading data from local CSV file..."):
+        df = pd.read_csv('data/tsla_data.csv')
+    if df is None or df.empty:
+        st.error("❌ No data could be loaded from the CSV file.")
+        st.info("Please check if the CSV file exists and contains data.")
+        st.stop()
+    # Display data info
+    st.info(f"📊 Loaded {len(df)} rows and {len(df.columns)} columns")
+    # Show first few rows to understand the data structure
+    with st.expander("👀 Preview Data (First 5 rows)"):
+        st.dataframe(df.head())
+    # Create data summary for AI
+    if 'data_summary' not in st.session_state or st.session_state.data_summary is None:
+        st.session_state.data_summary = create_data_summary(df)
+    # Dynamic data overview based on available columns
+    col1, col2, col3 = st.columns(3)
+    # Detect numeric columns for display
+    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+    with col1:
+        if numeric_cols:
+            first_numeric = numeric_cols[0]
+            st.markdown(
+                f"""
+                <div class="stat-card">
+                    <h4>📊 {first_numeric}</h4>
+                    <p class="info-text">Range: {df[first_numeric].min():.2f} - {df[first_numeric].max():.2f}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                f"""
+                <div class="stat-card">
+                    <h4>📊 Total Records</h4>
+                    <p class="info-text">{len(df)} rows</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    with col2:
+        if len(numeric_cols) > 1:
+            second_numeric = numeric_cols[1]
+            st.markdown(
+                f"""
+                <div class="stat-card">
+                    <h4>📈 {second_numeric}</h4>
+                    <p class="info-text">Avg: {df[second_numeric].mean():.2f}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                f"""
+                <div class="stat-card">
+                    <h4>📅 Columns</h4>
+                    <p class="info-text">{len(df.columns)} fields</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    with col3:
+        # Show date range if date column exists
+        date_cols = [col for col in df.columns if 'date' in col.lower() or 'time' in col.lower()]
+        if date_cols:
+            date_col = date_cols[0]
+            st.markdown(
+                f"""
+                <div class="stat-card">
+                    <h4>📅 Date Range</h4>
+                    <p class="info-text">{len(df)} records</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                f"""
+                <div class="stat-card">
+                    <h4>🔢 Data Points</h4>
+                    <p class="info-text">{len(df)} total</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    # API Configuration
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY")
+        if not api_key:
+            st.error("❌ GEMINI_API_KEY not found in Streamlit secrets.")
+            st.info("Please add your Gemini API key to the secrets configuration.")
+            st.stop()
+        genai.configure(api_key=api_key)
+        # Test API connection
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+    except Exception as e:
+        st.error(f"❌ Error configuring Gemini API: {str(e)}")
+        st.info("Please check your API key and internet connection.")
+        st.stop()
+    # Question input
+    st.markdown("### 💬 Ask About Your Data")
+    st.markdown(
+        """
+        <div class="question-box">
+            Ask me anything about the data from your CSV file. Examples:
+            • What are the key statistics in the data?
+            • How do the values compare across records?
+            • What trends can you identify?
+            • Analyze patterns in the data
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    question = st.text_input(
+        "Your Question:",
+        placeholder="Type your question about the data...",
+        key="question_input"
+    )
+    # Process question
+    if question:
+        try:
+            summary = st.session_state.data_summary
+            prompt_parts = [
+                "You are a data analysis assistant. Answer the user's question based on this data summary:",
+                "",
+                "Data Summary:",
+                json.dumps(summary, indent=2),
+                "",
+                f"User Question: {question}",
+                "",
+                "Provide a concise, data-driven answer in 2-3 sentences. Focus on specific numbers and patterns from the data."
+            ]
+            prompt = "\n".join(prompt_parts)
+            with st.spinner("🤖 Analyzing your question..."):
+                response = model.generate_content(prompt)
+            if response and hasattr(response, 'text') and response.text:
+                st.success("🤖 **AI Response:**")
+                st.markdown(response.text)
+                # Optionally, add to chat history
+                if 'chat_history' not in st.session_state:
+                    st.session_state.chat_history = []
+                st.session_state.chat_history.append({
+                    "question": question,
+                    "answer": response.text,
+                    "timestamp": datetime.now()
+                })
+            else:
+                st.error("❌ No response received from AI. Please try rephrasing your question.")
+        except Exception as e:
+            error_msg = str(e)
+            if "429" in error_msg or "quota" in error_msg:
+                st.error("❌ API rate limit exceeded. Please wait a minute and try again, or check your Gemini API quota and billing.")
+                st.info("See: https://ai.google.dev/gemini-api/docs/rate-limits")
+            else:
+                st.error(f"❌ Error: {str(e)}")
+                st.info("💡 Try asking a more specific question about the stock data.")
 except Exception as e:
-    st.error(f"An error occurred while loading or processing the data: {str(e)}")
-
-# ...existing code...
-
+    st.error(f"❌ An error occurred while loading the data: {str(e)}")
+    st.info("Please check that the CSV file exists and is accessible.")
 # Footer
 st.markdown("---")
 st.markdown(
-    """
-    <div style='text-align: center'>
-        <p>Powered by Gemini Pro | Built with Streamlit</p>
-        <p style='font-size: 0.8rem'>Last updated: {}</p>
+    f"""
+    <div style='text-align: center; color: #666;'>
+        <p>🤖 Powered by Google Gemini Pro | Built with Streamlit</p>
+        <p style='font-size: 0.8rem'>Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
     </div>
-    """.format(datetime.now().strftime("%Y-%m-%d")),
+    """,
     unsafe_allow_html=True
 )
