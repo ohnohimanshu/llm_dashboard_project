@@ -6,3 +6,4 @@ python-dotenv==1.0.1
 requests==2.31.0
 protobuf==4.25.3
 streamlit-lottie==0.0.5
+streamlit-extras==0.3.0
