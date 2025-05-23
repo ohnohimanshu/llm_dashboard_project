@@ -10,8 +10,12 @@ def load_data(file_path: str) -> pd.DataFrame:
         # Read CSV file with proper parsing
         df = pd.read_csv(file_path)
         
-        # Convert date strings to datetime
-        df['date'] = pd.to_datetime(df['date'], format='mixed')
+        # Convert date strings to datetime with error handling
+        try:
+            df['date'] = pd.to_datetime(df['date'], format='mixed')
+        except Exception:
+            # Try different format approaches
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
         
         # Rename columns to match expected format
         column_mapping = {

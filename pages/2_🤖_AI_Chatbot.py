@@ -19,9 +19,15 @@ def check_network_connectivity():
     try:
         # Try to connect to Google's DNS
         socket.create_connection(("8.8.8.8", 53), timeout=3)
+        # Also try to connect to the Gemini API endpoint
+        socket.create_connection(("generativelanguage.googleapis.com", 443), timeout=3)
         return True, "Connection successful"
     except OSError as e:
+        # More detailed error message
         return False, f"Connection failed: {str(e)}"
+    except Exception as e:
+        # Catch any other exceptions
+        return False, f"Unexpected error checking connection: {str(e)}"
 
 # Must be the first Streamlit command
 st.set_page_config(
@@ -111,94 +117,106 @@ with st.sidebar:
         if status["minute_reset_in"] > 0:
             st.info(f"⏱️ Rate limit resets in: {int(status['minute_reset_in'])} seconds")
 
-# Rate limiter class definition
-class RateLimiter:
-    def __init__(self, config):
-        self.minute_limit = config.get("requests_per_minute", 3)
-        self.daily_limit = config.get("requests_per_day", 50)
-        self.retry_delay = config.get("retry_delay", 60)
-        self.cooldown_period = config.get("cooldown_period", 300)
-        self.token_limit = config.get("token_limit", 4000)
-        self.requests_this_minute = 0
-        self.requests_today = 0
-        self.last_minute = datetime.now()
-        self.last_day = datetime.now().date()
-        self.in_cooldown = False
-        self.cooldown_start = None
-        self.consecutive_network_errors = 0
-        self.consecutive_rate_limit_errors = 0
+# Import the RateLimiter from utils
+from utils.rate_limiter import RateLimiter as BaseRateLimiter
 
-    def can_make_request(self):
-        now = datetime.now()
-        if self.in_cooldown:
-            if (now - self.cooldown_start).total_seconds() > self.cooldown_period:
-                self.in_cooldown = False
-                self.requests_this_minute = 0
-                self.requests_today = 0
-            else:
-                return False
-        if now.date() != self.last_day:
-            self.requests_today = 0
-            self.last_day = now.date()
-        if (now - self.last_minute).total_seconds() > 60:
-            self.requests_this_minute = 0
-            self.last_minute = now
-        if self.requests_this_minute < self.minute_limit and self.requests_today < self.daily_limit:
-            return True
+# Extended RateLimiter class with additional functionality
+class RateLimiter(BaseRateLimiter):
+  def __init__(self, config):
+    super().__init__(config)
+    self.minute_limit = config.get("requests_per_minute", 3)
+    self.daily_limit = config.get("requests_per_day", 50)
+    self.cooldown_period = config.get("cooldown_period", 300)
+    self.token_limit = config.get("token_limit", 4000)
+    self.in_cooldown = False
+    self.cooldown_start = None
+    self.consecutive_network_errors = 0
+    self.consecutive_rate_limit_errors = 0
+
+  def can_make_request(self):
+    now = datetime.now()
+    # Check cooldown first
+    if self.in_cooldown:
+        if (now - self.cooldown_start).total_seconds() > self.cooldown_period:
+            self.in_cooldown = False
+            self.reset_counters()
         else:
-            if self.requests_this_minute >= self.minute_limit or self.requests_today >= self.daily_limit:
-                self.in_cooldown = True
-                self.cooldown_start = now
             return False
+    
+    # Use base class method
+    can_request = super().can_make_request()
+    
+    # If rate limits exceeded, enter cooldown
+    if not can_request:
+        self.in_cooldown = True
+        self.cooldown_start = now
+        
+    return can_request
+    
+  def reset_counters(self):
+    """Reset all request counters"""
+    self.requests_this_minute = 0
+    self.requests_today = 0
+    self.last_minute = datetime.now()
+    self.day_start = datetime.now().date()
+    
+  def record_request(self):
+    # Call the parent class method
+    super().record_request()
+    
+    # Check if we need to enter cooldown
+    if self.requests_this_minute >= self.minute_limit or self.requests_today >= self.daily_limit:
+        self.in_cooldown = True
+        self.cooldown_start = datetime.now()
 
-    def record_request(self):
-        now = datetime.now()
-        if now.date() != self.last_day:
-            self.requests_today = 0
-            self.last_day = now.date()
-        if (now - self.last_minute).total_seconds() > 60:
-            self.requests_this_minute = 0
-            self.last_minute = now
-        self.requests_this_minute += 1
-        self.requests_today += 1
+  def get_wait_time(self):
+    now = datetime.now()
+    if self.in_cooldown:
+        return max(0, self.cooldown_period - (now - self.cooldown_start).total_seconds())
+    
+    # Get base wait time
+    base_wait_time = super().get_wait_time()
+    
+    # If we're at daily limit, enter cooldown
+    if self.requests_today >= self.daily_limit:
+        self.in_cooldown = True
+        self.cooldown_start = now
+        return max(0, self.cooldown_period)
+        
+    return base_wait_time
 
-    def get_wait_time(self):
-        now = datetime.now()
-        if self.in_cooldown:
-            return max(0, self.cooldown_period - (now - self.cooldown_start).total_seconds())
-        if self.requests_this_minute >= self.minute_limit:
-            return max(0, 60 - (now - self.last_minute).total_seconds())
-        if self.requests_today >= self.daily_limit:
-            return max(0, self.cooldown_period - (now - self.cooldown_start).total_seconds())
-        return 0
+  def get_rate_limit_status(self):
+    now = datetime.now()
+    minute_reset_in = max(0, 60 - (now - self.last_request_time).total_seconds())
+    cooldown_reset_in = 0
+    if self.in_cooldown and self.cooldown_start:
+        cooldown_reset_in = max(0, self.cooldown_period - (now - self.cooldown_start).total_seconds())
+    
+    return {
+        "minute_limit": self.minute_limit,
+        "daily_limit": self.daily_limit,
+        "requests_this_minute": self.requests_this_minute,
+        "requests_today": self.requests_today,
+        "minute_reset_in": minute_reset_in,
+        "cooldown_reset_in": cooldown_reset_in,
+        "in_cooldown": self.in_cooldown
+    }
 
-    def get_rate_limit_status(self):
-        now = datetime.now()
-        minute_reset_in = max(0, 60 - (now - self.last_minute).total_seconds())
-        return {
-            "minute_limit": self.minute_limit,
-            "daily_limit": self.daily_limit,
-            "requests_this_minute": self.requests_this_minute,
-            "requests_today": self.requests_today,
-            "minute_reset_in": minute_reset_in,
-            "in_cooldown": self.in_cooldown
-        }
+  def record_error(self, error_type="network"):
+    if error_type == "network":
+        self.consecutive_network_errors += 1
+    elif error_type == "rate_limit":
+        self.consecutive_rate_limit_errors += 1
 
-    def record_error(self, error_type="network"):
-        if error_type == "network":
-            self.consecutive_network_errors += 1
-        elif error_type == "rate_limit":
-            self.consecutive_rate_limit_errors += 1
+  def reset_network_errors(self):
+    self.consecutive_network_errors = 0
 
-    def reset_network_errors(self):
-        self.consecutive_network_errors = 0
+  def reset_rate_limit_errors(self):
+    self.consecutive_rate_limit_errors = 0
 
-    def reset_rate_limit_errors(self):
-        self.consecutive_rate_limit_errors = 0
-
-    def get_network_backoff_time(self, attempt, error_type=None):
-        # Exponential backoff: 2, 4, 8, ... seconds, max 60
-        return min(60, 2 ** (attempt + 1))
+  def get_network_backoff_time(self, attempt, error_type=None):
+    # Exponential backoff: 2, 4, 8, ... seconds, max 60
+    return min(60, 2 ** (attempt + 1))
 
 # Initialize session state variables
 if 'rate_limiter' not in st.session_state:
@@ -212,8 +230,9 @@ try:
     df = load_data("data/tsla_data.csv")
     if df is not None and not df.empty:
         # Display network status
-        if not check_network_connectivity():
-            st.error("⚠️ Network Error: Please check your internet connection")
+        network_status, network_message = check_network_connectivity()
+        if not network_status:
+            st.error(f"⚠️ Network Error: {network_message}")
             st.stop()
             
         # Data overview in cards
@@ -268,9 +287,10 @@ try:
         )
         
         question = st.text_input(
-            "",
+            "Question",  # Adding a proper label to fix the empty label warning
             placeholder="Type your question here...",
-            key="question_input"
+            key="question_input",
+            label_visibility="collapsed"  # Hide the label but keep it accessible
         )
 
         # Add a clear button
@@ -334,7 +354,29 @@ try:
                         if "token_limit" in error_msg:
                             st.error("The question requires too much data. Please try a more specific question.")
                             return None
-                        # ...rest of error handling...
+                        elif "rate limit" in error_msg or "429" in error_msg:
+                            st.session_state.rate_limiter.record_error("rate_limit")
+                            wait_time = st.session_state.rate_limiter.get_network_backoff_time(attempt, "rate_limit")
+                            st.warning(f"Rate limit exceeded. Waiting {wait_time} seconds before retrying...")
+                            time.sleep(wait_time)
+                            continue
+                        elif "503" in error_msg or "server error" in error_msg or "unavailable" in error_msg:
+                            st.session_state.rate_limiter.record_error("network")
+                            wait_time = st.session_state.rate_limiter.get_network_backoff_time(attempt, "network")
+                            st.warning(f"Google API service unavailable. Waiting {wait_time} seconds before retrying...")
+                            time.sleep(wait_time)
+                            continue
+                        else:
+                            st.error(f"Error generating response: {str(e)}")
+                            return None
+                else:
+                    wait_time = st.session_state.rate_limiter.get_wait_time()
+                    st.warning(f"Rate limit reached. Please wait {wait_time} seconds before trying again.")
+                    time.sleep(min(wait_time, 5))  # Wait at most 5 seconds in the loop
+                    continue
+            
+            st.error("Maximum retry attempts reached. Please try again later.")
+            return None
 
         # AI response
         if question and model:
