@@ -14,7 +14,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-<<<<<<< HEAD
 # Custom CSS
 st.markdown("""
 <style>
@@ -53,7 +52,7 @@ def main():
     try:
         # Main header
         st.markdown('<h1 class="main-header">📈 TSLA Stock Analysis Dashboard</h1>', unsafe_allow_html=True)
-        
+
         # Welcome message
         st.markdown("""
         <div class="info-box">
@@ -68,24 +67,24 @@ def main():
             <p>Please select a page from the sidebar to begin your analysis.</p>
         </div>
         """, unsafe_allow_html=True)
-        
+
         # Sidebar information
         with st.sidebar:
             st.markdown("### Navigation")
             st.markdown("""
-            - 📊 **Candlestick Dashboard**: View interactive price charts
+            - 📈 **Candlestick Dashboard**: View interactive price charts
             - 🤖 **AI Chatbot**: Get AI-powered market insights
             """)
-            
+
             st.markdown("### About")
             st.markdown("""
             This dashboard is designed for educational and analytical purposes.
             Data is sourced from reliable financial APIs and is updated regularly.
             """)
-            
+
             st.markdown("### Version")
             st.markdown("v1.0.0")
-            
+
     except Exception as e:
         st.error(f"An error occurred: {str(e)}")
         st.markdown("""
@@ -96,7 +95,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-=======
-st.title("📈 TSLA Stock Analysis Dashboard")
-st.write("Welcome to the TSLA Stock Analysis Dashboard. Please select a page from the sidebar.")
->>>>>>> 0a409822f013deff9465a63f4bb998d12486bff4
