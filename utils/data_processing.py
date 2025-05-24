@@ -16,21 +16,6 @@ def convert_datetime_to_str(df, date_column='Date'):
     return df
 
 
-def parse_price_list(val):
-    """Parse price list string into list of floats"""
-    if pd.isna(val):
-        return "[]"
-    if isinstance(val, str):
-        # Remove brackets and split by comma
-        clean_str = val.strip('[]')
-        try:
-            prices = [float(x.strip()) for x in clean_str.split(',') if x.strip()]
-            return str(prices)  # Return as string representation of list
-        except:
-            return "[]"
-    return "[]"
-
-
 def load_data(file_path: str = 'data/tsla_data.csv') -> pd.DataFrame:
     """Load and process TSLA stock data from a local CSV file only."""
     try:
@@ -78,42 +63,47 @@ def load_data(file_path: str = 'data/tsla_data.csv') -> pd.DataFrame:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col].astype(str).str.replace('[$,]', '', regex=True), errors='coerce')
 
-        # Process direction column
-        if 'Direction' in df.columns:
-            df['Direction'] = df['Direction'].str.upper()
-            df['Direction'] = df['Direction'].apply(lambda x: x if x in ['LONG', 'SHORT', 'NONE'] else 'NONE')
+        # Remove rows with any null values in OHLC columns
+        required_columns = ['Date', 'Open', 'High', 'Low', 'Close']
+        null_counts = df[required_columns].isnull().sum()
+        total_nulls = null_counts.sum()
+        if total_nulls > 0:
+            st.warning(f"⚠️ Found null values: {dict(null_counts[null_counts > 0])}")
+        original_count = len(df)
+        df = df.dropna(subset=required_columns)
+        removed_count = original_count - len(df)
+        if removed_count > 0:
+            st.warning(f"⚠️ Removed {removed_count} rows with null values in OHLC columns")
+        if len(df) == 0:
+            raise ValueError("No valid data rows remain after cleaning")
 
-        # Process support and resistance columns - keep as strings for Arrow compatibility
-        if 'Support' in df.columns:
-            df['Support'] = df['Support'].apply(parse_price_list)
-        if 'Resistance' in df.columns:
-            df['Resistance'] = df['Resistance'].apply(parse_price_list)
-
-        # Remove rows with invalid OHLC data
-        df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
-        
         # Sort by date
         df = df.sort_values('Date')
         
         # Convert datetime to string format for Arrow compatibility
         df = convert_datetime_to_str(df)
-        
-        # Ensure all columns have proper dtypes for Arrow serialization
-        df = df.astype({
-            'Date': 'string',
-            'Open': 'float64',
-            'High': 'float64',
-            'Low': 'float64',
-            'Close': 'float64',
-            'Volume': 'float64',
-            'Direction': 'string',
-            'Support': 'string',
-            'Resistance': 'string'
-        })
-        
+        # Ensure all columns are Arrow-compatible (no object/list columns)
+        for col in df.columns:
+            if df[col].dtype == 'O':
+                df[col] = df[col].apply(lambda x: ','.join(map(str, x)) if isinstance(x, (list, tuple)) else str(x) if not pd.isna(x) else '')
+        # Apply list string to CSV conversion
+        for col in ['Support', 'Resistance', 'direction']:
+            if col in df.columns:
+                df[col] = df[col].apply(list_str_to_csv)
         st.success(f"✅ Successfully loaded {len(df)} rows of data")
         return df
         
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
         return None
+
+def list_str_to_csv(val):
+    # Converts '[840, 880]' or '[840]' to '840,880' or '840'
+    if isinstance(val, str) and val.startswith('[') and val.endswith(']'):
+        try:
+            parsed = ast.literal_eval(val)
+            if isinstance(parsed, (list, tuple)):
+                return ','.join(str(x) for x in parsed)
+        except Exception:
+            pass
+    return val
