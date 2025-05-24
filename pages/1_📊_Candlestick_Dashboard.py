@@ -120,12 +120,12 @@ def main():
                 # Show legend
                 st.markdown("### Chart Legend")
                 st.markdown("""
-                - 🟢 Green Arrow (↑): LONG position
-                - 🔴 Red Arrow (↓): SHORT position
-                - 🟡 Yellow Circle: No position
-                - 💚 Green Band: Support levels
-                - ❤️ Red Band: Resistance levels
-                """)
+                <span style='color:#26a69a;font-size:1.3em;'>&#8593;</span> Green up arrow (below candle): LONG position  
+                <span style='color:#ef5350;font-size:1.3em;'>&#8595;</span> Red down arrow (above candle): SHORT position  
+                <span style='color:#FFD600;font-size:1.3em;'>●</span> Yellow circle: No position  
+                🟩 Green band: Support levels  
+                🟥 Red band: Resistance levels 
+                """, unsafe_allow_html=True)
             
             with col1:
                 # Display TradingView chart

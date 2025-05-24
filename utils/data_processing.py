@@ -16,23 +16,19 @@ def convert_datetime_to_str(df, date_column='Date'):
     return df
 
 
-def list_str_to_csv(val):
-    """Convert list string to CSV format and handle direction values"""
+def parse_price_list(val):
+    """Parse price list string into list of floats"""
     if pd.isna(val):
-        return val
+        return "[]"
     if isinstance(val, str):
-        # Handle direction values
-        if val.upper() in ['LONG', 'SHORT', 'NONE']:
-            return val.upper()
-        # Handle list strings
-        if val.startswith('[') and val.endswith(']'):
-            try:
-                parsed = ast.literal_eval(val)
-                if isinstance(parsed, (list, tuple)):
-                    return ','.join(str(x) for x in parsed)
-            except Exception:
-                pass
-    return val
+        # Remove brackets and split by comma
+        clean_str = val.strip('[]')
+        try:
+            prices = [float(x.strip()) for x in clean_str.split(',') if x.strip()]
+            return str(prices)  # Return as string representation of list
+        except:
+            return "[]"
+    return "[]"
 
 
 def load_data(file_path: str = 'data/tsla_data.csv') -> pd.DataFrame:
@@ -82,10 +78,16 @@ def load_data(file_path: str = 'data/tsla_data.csv') -> pd.DataFrame:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col].astype(str).str.replace('[$,]', '', regex=True), errors='coerce')
 
-        # Process direction, support, and resistance columns
-        for col in ['Direction', 'Support', 'Resistance']:
-            if col in df.columns:
-                df[col] = df[col].apply(list_str_to_csv)
+        # Process direction column
+        if 'Direction' in df.columns:
+            df['Direction'] = df['Direction'].str.upper()
+            df['Direction'] = df['Direction'].apply(lambda x: x if x in ['LONG', 'SHORT', 'NONE'] else 'NONE')
+
+        # Process support and resistance columns - keep as strings for Arrow compatibility
+        if 'Support' in df.columns:
+            df['Support'] = df['Support'].apply(parse_price_list)
+        if 'Resistance' in df.columns:
+            df['Resistance'] = df['Resistance'].apply(parse_price_list)
 
         # Remove rows with invalid OHLC data
         df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
@@ -95,6 +97,19 @@ def load_data(file_path: str = 'data/tsla_data.csv') -> pd.DataFrame:
         
         # Convert datetime to string format for Arrow compatibility
         df = convert_datetime_to_str(df)
+        
+        # Ensure all columns have proper dtypes for Arrow serialization
+        df = df.astype({
+            'Date': 'string',
+            'Open': 'float64',
+            'High': 'float64',
+            'Low': 'float64',
+            'Close': 'float64',
+            'Volume': 'float64',
+            'Direction': 'string',
+            'Support': 'string',
+            'Resistance': 'string'
+        })
         
         st.success(f"✅ Successfully loaded {len(df)} rows of data")
         return df

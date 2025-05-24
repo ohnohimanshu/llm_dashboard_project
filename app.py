@@ -1,6 +1,10 @@
 import streamlit as st
 import sys
 from pathlib import Path
+import pandas as pd
+from utils.data_processing import load_data
+from utils.tradingview_component import tradingview_chart
+from utils.chatbot import display_chatbot
 
 # Add the project root to Python path
 project_root = Path(__file__).parent
@@ -84,6 +88,8 @@ def main():
 
             st.markdown("### Version")
             st.markdown("v1.0.0")
+
+      
 
     except Exception as e:
         st.error(f"An error occurred: {str(e)}")
