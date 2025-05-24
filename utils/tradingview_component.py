@@ -65,15 +65,12 @@ def tradingview_chart(data, height=500, key=None):
                 "close": float(row['Close'])
             })
 
-
-    # Prepare direction markers
-
+    # Prepare direction markers (arrow/circle without label)
     direction_markers = []
     if 'Direction' in data.columns:
         for idx, row in data.iterrows():
             if pd.notna(row['Direction']):
                 direction = row['Direction'].upper()
-
                 if direction == 'LONG':
                     marker = {
                         "time": row['Date'],
@@ -121,73 +118,6 @@ def tradingview_chart(data, height=500, key=None):
                     "max": max(prices)
                 })
 
-                if direction in ['LONG', 'SHORT', 'NONE']:
-                    marker = {
-                        "time": row['Date'],
-                        "position": "belowBar" if direction == 'LONG' else "aboveBar" if direction == 'SHORT' else "inBar",
-                        "color": "#26a69a" if direction == 'LONG' else "#ef5350" if direction == 'SHORT' else "#ffeb3b",
-                        "shape": "arrowUp" if direction == 'LONG' else "arrowDown" if direction == 'SHORT' else "circle",
-                        "text": direction
-                    }
-                    direction_markers.append(marker)
-
-    # Prepare support and resistance bands
-    support_bands = []
-    resistance_bands = []
-    
-    if 'Support' in data.columns:
-        for idx, row in data.iterrows():
-            if pd.notna(row['Support']):
-                prices = parse_price_list(row['Support'])
-                if prices:
-                    # Add lower bound of support band (green)
-                    support_bands.append({
-                        "time": row['Date'],
-                        "value": min(prices),
-                        "lineWidth": 2,
-                        "lineColor": "#26a69a",  # Green color
-                        "lineStyle": 0,
-                        "axisLabelVisible": True,
-                        "title": "Support Lower"
-                    })
-                    # Add upper bound of support band (green)
-                    support_bands.append({
-                        "time": row['Date'],
-                        "value": max(prices),
-                        "lineWidth": 2,
-                        "lineColor": "#26a69a",  # Green color
-                        "lineStyle": 0,
-                        "axisLabelVisible": True,
-                        "title": "Support Upper"
-                    })
-    
-    if 'Resistance' in data.columns:
-        for idx, row in data.iterrows():
-            if pd.notna(row['Resistance']):
-                prices = parse_price_list(row['Resistance'])
-                if prices:
-                    # Add lower bound of resistance band (red)
-                    resistance_bands.append({
-                        "time": row['Date'],
-                        "value": min(prices),
-                        "lineWidth": 2,
-                        "lineColor": "#ef5350",  # Red color
-                        "lineStyle": 0,
-                        "axisLabelVisible": True,
-                        "title": "Resistance Lower"
-                    })
-                    # Add upper bound of resistance band (red)
-                    resistance_bands.append({
-                        "time": row['Date'],
-                        "value": max(prices),
-                        "lineWidth": 2,
-                        "lineColor": "#ef5350",  # Red color
-                        "lineStyle": 0,
-                        "axisLabelVisible": True,
-                        "title": "Resistance Upper"
-                    })
-
-
     # Create HTML with TradingView chart
     html = f'''
     <div id="{key}_container" style="width: 100%; height: {height}px; border: 1px solid #ddd; position: relative;"></div>
@@ -230,7 +160,6 @@ def tradingview_chart(data, height=500, key=None):
         candlestickSeries.setData({json.dumps(candlestick_data)});
 
         // Add direction markers
-
         candlestickSeries.setMarkers({json.dumps(direction_markers)});
 
         // Support band (filled area)
@@ -264,41 +193,6 @@ def tradingview_chart(data, height=500, key=None):
                 lastValueVisible: false,
             }});
             resistanceArea.setData(resistanceMax);
-
-        const directionMarkers = {json.dumps(direction_markers)};
-        directionMarkers.forEach(marker => {{
-            candlestickSeries.setMarkers([marker]);
-        }});
-
-        // Add support and resistance bands
-        const supportBands = {json.dumps(support_bands)};
-        const resistanceBands = {json.dumps(resistance_bands)};
-
-        // Create support band series (green)
-        if (supportBands && supportBands.length > 0) {{
-            const supportSeries = chart.addLineSeries({{
-                color: '#26a69a',  // Green color
-                lineWidth: 2,
-                lineStyle: LightweightCharts.LineStyle.Solid,
-                lastValueVisible: false,
-                priceLineVisible: false,
-                title: 'Support Band'
-            }});
-            supportSeries.setData(supportBands);
-        }}
-
-        // Create resistance band series (red)
-        if (resistanceBands && resistanceBands.length > 0) {{
-            const resistanceSeries = chart.addLineSeries({{
-                color: '#ef5350',  // Red color
-                lineWidth: 2,
-                lineStyle: LightweightCharts.LineStyle.Solid,
-                lastValueVisible: false,
-                priceLineVisible: false,
-                title: 'Resistance Band'
-            }});
-            resistanceSeries.setData(resistanceBands);
-
         }}
 
         // Handle window resize
